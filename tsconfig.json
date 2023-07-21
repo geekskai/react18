@@ -3,6 +3,7 @@
 	"include": ["./packages/**/*"],
 	"compilerOptions": {
 		"target": "ESNext",
+		"jsx": "react-jsx",
 		"useDefineForClassFields": true,
 		"module": "ESNext",
 		"lib": ["ESNext", "DOM"],
