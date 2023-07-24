@@ -389,7 +389,7 @@ function reconcileChildren(wip: FiberNode, children?: ReactElementType) {
 }
 ```
 
-接下来就是重点ChildReconciler
+接下来就是重点ChildReconciler，有2点比较重要，第一点是通过子element创建子fiber的方式，第二点是给子fiber打上flag的标识，
 
 ```
 function ChildReconciler(shouldTrackEffects: boolean) {
@@ -457,4 +457,29 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 
 export const reconcileChildFibers = ChildReconciler(true);
 export const mountChildFibers = ChildReconciler(false);
+
+
+```
+
+执行完了所有beginWork之后，就进入了completeWork阶段，completeWork 需要解决的其中一个问题就是：对Host类型的FiberNode构建离屏DOM树
+
+```
+function completeUnitOfWork(fiber: FiberNode) {
+let node: FiberNode | null = fiber;
+
+    do {
+    	completeWork(node);
+
+    	const sibling = node.sibling;
+
+    	if (sibling !== null) {
+    		workInProgress = sibling;
+
+    		return;
+    	}
+    	node = node.return;
+    	workInProgress = node;
+    } while (node !== null);
+
+}
 ```
