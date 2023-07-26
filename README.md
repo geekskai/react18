@@ -267,6 +267,13 @@ function renderRoot(root: FiberRootNode) {
 			workInProgress = null;
 		}
 	} while (true);
+
+    // 当执行完了 workLoop 之后，就会形成一个workInProgress树
+	const finishedWork = root.current.alternate;
+	root.finishedWork = finishedWork;
+
+	// 实现commit阶段 wip fiberNode树 树中的flags
+	commitRoot(root);
 }
 
 ```
@@ -473,6 +480,7 @@ let node: FiberNode | null = fiber;
     	const sibling = node.sibling;
 
     	if (sibling !== null) {
+			// 如果存在sibling，那么sibling 开始进入beginWork
     		workInProgress = sibling;
 
     		return;
@@ -483,3 +491,144 @@ let node: FiberNode | null = fiber;
 
 }
 ```
+
+### 实现commit阶段的3个子阶段
+
+commit阶段主要是执行root上面的flags和subtreeFlags这些mutation
+
+1. beforeMutation阶段
+2. mutation阶段
+3. layout阶段
+
+```
+
+function commitRoot(root: FiberRootNode) {
+	const finishedWork = root.finishedWork;
+
+	if (finishedWork === null) {
+		return;
+	}
+
+	if (__DEV__) {
+		console.warn('commit阶段开始', finishedWork);
+	}
+
+	// 重置
+	root.finishedWork = null;
+
+	const subtreeHasEffect = (finishedWork.subtreeFlags & MutationMask) !== NoFlags;
+	const rootHasEffect = (finishedWork.flags & MutationMask) !== NoFlags;
+
+    // 先判断root或者children有没有需要执行的Effect
+	if (subtreeHasEffect || rootHasEffect) {
+
+		commitMutationEffects(finishedWork);
+
+		// 进行视图切换
+		root.current = finishedWork;
+	} else {
+		root.current = finishedWork;
+	}
+}
+```
+
+```
+export const commitMutationEffects = (finishedWork: FiberNode) => {
+	nextEffect = finishedWork;
+
+	while (nextEffect !== null) {
+		// 向下遍历
+		const child: FiberNode | null = nextEffect.child;
+
+		if (
+			(nextEffect.subtreeFlags & MutationMask) !== NoFlags &&
+			child !== null
+		) {
+			nextEffect = child;
+		} else {
+			// 向上遍历 DFS
+			up: while (nextEffect !== null) {
+				commitMutationEffectsOnFiber(nextEffect);
+				const sibling: FiberNode | null = nextEffect.sibling;
+
+				if (sibling !== null) {
+					nextEffect = sibling;
+					break up;
+				}
+				nextEffect = nextEffect.return;
+			}
+		}
+	}
+};
+
+
+const commitMutationEffectsOnFiber = (finishedWork: FiberNode) => {
+	const flags = finishedWork.flags;
+
+	if ((flags & Placement) !== NoFlags) {
+		commitPlacement(finishedWork);
+		// 执行对应的方法之后，再将flags删除
+		finishedWork.flags &= ~Placement;
+	}
+	// flags Update
+	// flags ChildDeletion
+};
+
+const commitPlacement = (finishedWork: FiberNode) => {
+	// 通过fiber找到 parent 的真实DOM节点
+	const hostParent = getHostParent(finishedWork);
+	// finishedWork ~~ DOM append parent DOM
+	if (hostParent !== null) {
+		appendPlacementNodeIntoContainer(finishedWork, hostParent);
+	}
+};
+
+// 通过fiber找到HostParent类型的真实DOM节点
+function getHostParent(fiber: FiberNode): Container | null {
+	let parent = fiber.return;
+
+	while (parent) {
+		const parentTag = parent.tag;
+		// HostComponent HostRoot
+		if (parentTag === HostComponent) {
+			return parent.stateNode as Container;
+		}
+		if (parentTag === HostRoot) {
+			return (parent.stateNode as FiberRootNode).container;
+		}
+		parent = parent.return;
+	}
+	if (__DEV__) {
+		console.warn('未找到host parent');
+	}
+	return null;
+}
+
+// 只有tag是host类型的fiber对应的stateNode 才是DOM的真实节点
+function appendPlacementNodeIntoContainer(
+	finishedWork: FiberNode,
+	hostParent: Container
+) {
+	// fiber host
+	if (finishedWork.tag === HostComponent || finishedWork.tag === HostText) {
+		appendChildToContainer(hostParent, finishedWork.stateNode);
+		return;
+	}
+	// 如果存在child 继续执行appendPlacementNodeIntoContainer直到是tag类型是HostComponent或者HostText为止
+	const child = finishedWork.child;
+	if (child !== null) {
+		appendPlacementNodeIntoContainer(child, hostParent);
+		let sibling = child.sibling;
+
+		while (sibling !== null) {
+			appendPlacementNodeIntoContainer(sibling, hostParent);
+			sibling = sibling.sibling;
+		}
+	}
+}
+```
+
+## 简单总结
+
+1. beginWork阶段，就是递归过程中使用DFS遍历，从root顶部根节点往下子节点归的过程，这个过程中会通过ReactElement生成与之对应的子fiber节点，同时给fiber打上是移动，还是删除等标记，直到往下归到最后的节点child为null的时候，递阶段结束此时一颗完整的 workInProgress 树也生成了，接下来就开始进入了归的complete的阶段
+2. complete阶段是从最底部的fiber节点开始向上归的过程，在这个过程中收集在递阶段的fiber节点是否有打上标记的flags,根据对应的flags,执行实质性的DOM操作进行渲染。
